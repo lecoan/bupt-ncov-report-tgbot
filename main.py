@@ -1,6 +1,11 @@
 from include import *
 from peewee import SqliteDatabase
-import argparse, traceback, sys, datetime, requests
+import argparse
+import traceback
+import sys
+import datetime
+import requests
+import logging
 from shutil import copyfile
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -8,38 +13,46 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, DispatcherHandlerStop
 import telegram
 
+
 def tguser_check(update, context):
     if BOT_DEBUG == True and update.message.from_user.id != TG_BOT_MASTER:
         update.message.reply_text("DEBUGGING, Try again later.")
         raise DispatcherHandlerStop()
 
     user, _ = TGUser.get_or_create(
-        userid = update.message.from_user.id
+        userid=update.message.from_user.id
     )
     now_username = update.message.from_user.username or update.message.from_user.first_name
     if user.username != now_username:
         user.username = now_username
         user.save()
 
+
 def start_entry(update, context):
     """Send a message when the command /start is issued."""
-    update.message.reply_text("Welcome, {}. try /help.\nSpecial Thanks to https://github.com/ipid/bupt-ncov-report".format(update.message.from_user.username or update.message.from_user.first_name or ''), disable_web_page_preview=True)
+    update.message.reply_text("Welcome, {}. try /help.\nSpecial Thanks to https://github.com/ipid/bupt-ncov-report".format(
+        update.message.from_user.username or update.message.from_user.first_name or ''), disable_web_page_preview=True)
     help_entry(update, context)
+
 
 def help_entry(update, context):
     """Send a message when the command /help is issued."""
-    update.message.reply_markdown(HELP_MARKDOWN.strip(), disable_web_page_preview=True)
+    update.message.reply_markdown(
+        HELP_MARKDOWN.strip(), disable_web_page_preview=True)
+
 
 def list_entry(update, context, admin_all=False):
     first_message = update.message.reply_markdown(f"用户列表查询中 ...")
     if admin_all == True:
-        users = BUPTUser.select().where(BUPTUser.status != BUPTUserStatus.removed).prefetch(TGUser)
+        users = BUPTUser.select().where(
+            BUPTUser.status != BUPTUserStatus.removed).prefetch(TGUser)
     else:
         # users = BUPTUser.select().where(BUPTUser.owner == update.message.from_user.id).order_by(BUPTUser.id.asc())
         tguser = TGUser.get(
-            userid = update.message.from_user.id
+            userid=update.message.from_user.id
         )
-        users = tguser.buptusers.where(BUPTUser.status != BUPTUserStatus.removed)
+        users = tguser.buptusers.where(
+            BUPTUser.status != BUPTUserStatus.removed)
     ret_msgs = []
     ret_msg = ''
     for i, user in enumerate(users):
@@ -49,9 +62,11 @@ def list_entry(update, context, admin_all=False):
         id = i+1
         ret_msg += f'ID: `{id}`\n'
         if user.username != None:
-            ret_msg += f'Username: `{user.username}`\n' #Password: `{user.password}`\n'
+            # Password: `{user.password}`\n'
+            ret_msg += f'Username: `{user.username}`\n'
         else:
-            ret_msg += f'eai-sess: `{user.cookie_eaisess}`\n' #UUKey: `{user.cookie_uukey}`\n'
+            # UUKey: `{user.cookie_uukey}`\n'
+            ret_msg += f'eai-sess: `{user.cookie_eaisess}`\n'
         if admin_all:
             ret_msg += f'Owner: `{user.owner.userid}` `{user.owner.username.replace("`","")}`\n'
         if user.status == BUPTUserStatus.normal:
@@ -91,84 +106,80 @@ def list_entry(update, context, admin_all=False):
         update.message.reply_markdown(msg)
 
 
-def add_by_cookie_entry(update, context):
-    if len(context.args) != 2:
-        first_message = update.message.reply_markdown(f"例：/add\_by\_cookie `1cmgkrrcssge6edkkg3ucigj1m` `44f522350f5e843fbac58b726753eb36`")
-        return
-    eaisess = context.args[0]
-    uukey = context.args[1]
-    first_message = update.message.reply_markdown(f"Adding ...")
-
-    tguser = TGUser.get(
-        userid = update.message.from_user.id
-    )
-
-    buptuser, _ = BUPTUser.get_or_create(
-        owner = tguser,
-        cookie_eaisess = eaisess,
-        cookie_uukey = uukey,
-        status = BUPTUserStatus.normal,
-        xisu_checkin_status = BUPTUserStatus.normal,
-    )
-
-    first_message.edit_text('添加成功！', parse_mode = telegram.ParseMode.MARKDOWN)
-    list_entry(update, context)
-
-def add_by_uid_entry(update, context):
-    if len(context.args) != 2:
-        first_message = update.message.reply_markdown(f"例：/add\_by\_uid `2010211000` `password123`")
+def add_user_entry(update, context):
+    if len(context.args) < 2:
+        first_message = update.message.reply_markdown(
+            f"例：/add `2010211000` `password123` [13000110011]")
         return
     username = context.args[0]
     password = context.args[1]
+    phone = context.args[2] if len(context.args) > 2 else None
+
     first_message = update.message.reply_markdown(f"Adding ...")
 
     tguser = TGUser.get(
-        userid = update.message.from_user.id
+        userid=update.message.from_user.id
     )
 
     buptuser, _ = BUPTUser.get_or_create(
-        owner = tguser,
-        username = username,
-        password = password,
-        status = BUPTUserStatus.normal,
-        xisu_checkin_status = BUPTUserStatus.normal,
+        owner=tguser,
+        username=username,
+        password=password,
+        phone=phone,
+        status=BUPTUserStatus.normal,
+        xisu_checkin_status=BUPTUserStatus.normal,
     )
 
-    first_message.edit_text('添加成功！', parse_mode = telegram.ParseMode.MARKDOWN)
+    first_message.edit_text('添加成功！', parse_mode=telegram.ParseMode.MARKDOWN)
     list_entry(update, context)
 
-def checkin_entry(update, context):
+
+def _get_target(update, context):
     tguser = TGUser.get(
-        userid = update.message.from_user.id
+        userid=update.message.from_user.id
     )
     if len(context.args) > 0:
         targets = tguser.get_buptusers_by_seqids(list(map(int, context.args)))
     else:
         targets = tguser.get_buptusers()
+    return targets
 
+
+def checkin_outsch_entry(update, context):
+    targets = _get_target(update, context)
     if len(targets) == 0:
         ret_msg = '用户列表为空'
         update.message.reply_markdown(ret_msg)
         return
     for buptuser in targets:
         try:
-            ret = buptuser.ncov_checkin(force=True)[:100]
-            ret_msg = f"用户：`{buptuser.username or buptuser.cookie_eaisess or '[None]'}`\n签到成功！\n服务器返回：`{ret}`"
-        except requests.exceptions.Timeout as e:
-            ret_msg = f"用户：`{buptuser.username or buptuser.cookie_eaisess or '[None]'}`\n签到失败，服务器错误！\n`{e}`"
+            ret = buptuser.out_sch_checkin(force=True)[:100]
+            ret_msg = f"用户：`{buptuser.username}`\n签到成功！\n服务器返回：`{ret}`"
         except Exception as e:
-            ret_msg = f"用户：`{buptuser.username or buptuser.cookie_eaisess or '[None]'}`\n签到异常！\n服务器返回：`{e}`"
+            ret_msg = f"用户：`{buptuser.username}`\n签到异常！\n服务器返回：`{e}`"
         update.message.reply_markdown(ret_msg)
 
-def checkinxisu_entry(update, context):
-    tguser = TGUser.get(
-        userid = update.message.from_user.id
-    )
-    if len(context.args) > 0:
-        targets = tguser.get_buptusers_by_seqids(list(map(int, context.args)))
-    else:
-        targets = tguser.get_buptusers()
 
+def checkin_entry(update, context):
+    targets = _get_target(update, context)
+    if len(targets) == 0:
+        ret_msg = '用户列表为空'
+        update.message.reply_markdown(ret_msg)
+        ret_msg = f"用户：`{buptuser.username}`\n签到成功！\n服务器返回：`{ret}`"
+        return
+    for buptuser in targets:
+        try:
+            ret = buptuser.ncov_checkin(force=True)[:100]
+            ret_msg = f"用户：`{buptuser.username}`\n签到成功！\n服务器返回：`{ret}`"
+        except requests.exceptions.Timeout as e:
+            ret_msg = f"用户：`{buptuser.username}`\n签到失败，服务器错误！\n`{e}`"
+        except Exception as e:
+            ret_msg = f"用户：`{buptuser.username}`\n签到异常！\n服务器返回：`{e}`"
+        update.message.reply_markdown(ret_msg)
+
+
+def checkinxisu_entry(update, context):
+    targets = _get_target(update, context)
     if len(targets) == 0:
         ret_msg = '用户列表为空'
         update.message.reply_markdown(ret_msg)
@@ -176,100 +187,79 @@ def checkinxisu_entry(update, context):
     for buptuser in targets:
         try:
             ret = buptuser.xisu_ncov_checkin(force=True)[:100]
-            ret_msg = f"用户：`{buptuser.username or buptuser.cookie_eaisess or '[None]'}`\n晨午晚检成功！\n服务器返回：`{ret}`"
+            ret_msg = f"用户：`{buptuser.username}`\n晨午晚检成功！\n服务器返回：`{ret}`"
         except requests.exceptions.Timeout as e:
-            ret_msg = f"用户：`{buptuser.username or buptuser.cookie_eaisess or '[None]'}`\n晨午晚检失败，服务器错误！\n`{e}`"
+            ret_msg = f"用户：`{buptuser.username}`\n晨午晚检失败，服务器错误！\n`{e}`"
         except Exception as e:
-            ret_msg = f"用户：`{buptuser.username or buptuser.cookie_eaisess or '[None]'}`\n晨午晚检异常！\n服务器返回：`{e}`"
+            ret_msg = f"用户：`{buptuser.username}`\n晨午晚检异常！\n服务器返回：`{e}`"
         update.message.reply_markdown(ret_msg)
 
-def pausexisu_entry(update, context):
-    tguser = TGUser.get(
-        userid = update.message.from_user.id
-    )
-    if len(context.args) > 0:
-        targets = tguser.get_buptusers_by_seqids(list(map(int, context.args)))
-    else:
-        targets = tguser.get_buptusers()
 
+def pausexisu_entry(update, context):
+    targets = _get_target(update, context)
     for buptuser in targets:
         buptuser.xisu_checkin_status = BUPTUserStatus.stopped
         buptuser.save()
-        ret_msg = f"用户：`{buptuser.username or buptuser.cookie_eaisess or '[None]'}`\n已暂停自动晨午晚检。"
+        ret_msg = f"用户：`{buptuser.username}`\n已暂停自动晨午晚检。"
         update.message.reply_markdown(ret_msg)
 
+
 def resumexisu_entry(update, context):
-    tguser = TGUser.get(
-        userid = update.message.from_user.id
-    )
-    if len(context.args) > 0:
-        targets = tguser.get_buptusers_by_seqids(list(map(int, context.args)))
-    else:
-        targets = tguser.get_buptusers()
+    targets = _get_target(update, context)
 
     for buptuser in targets:
         buptuser.xisu_checkin_status = BUPTUserStatus.normal
         buptuser.save()
-        ret_msg = f"用户：`{buptuser.username or buptuser.cookie_eaisess or '[None]'}`\n已启用自动晨午晚检。"
+        ret_msg = f"用户：`{buptuser.username}`\n已启用自动晨午晚检。"
         update.message.reply_markdown(ret_msg)
 
+
 def pause_entry(update, context):
-    tguser = TGUser.get(
-        userid = update.message.from_user.id
-    )
-    if len(context.args) > 0:
-        targets = tguser.get_buptusers_by_seqids(list(map(int, context.args)))
-    else:
-        targets = tguser.get_buptusers()
+    targets = _get_target(update, context)
 
     for buptuser in targets:
         buptuser.status = BUPTUserStatus.stopped
         buptuser.save()
-        ret_msg = f"用户：`{buptuser.username or buptuser.cookie_eaisess or '[None]'}`\n已暂停自动签到。"
+        ret_msg = f"用户：`{buptuser.username}`\n已暂停自动签到。"
         update.message.reply_markdown(ret_msg)
 
+
 def resume_entry(update, context):
-    tguser = TGUser.get(
-        userid = update.message.from_user.id
-    )
-    if len(context.args) > 0:
-        targets = tguser.get_buptusers_by_seqids(list(map(int, context.args)))
-    else:
-        targets = tguser.get_buptusers()
+    targets = _get_target(update, context)
 
     for buptuser in targets:
         buptuser.status = BUPTUserStatus.normal
         buptuser.save()
-        ret_msg = f"用户：`{buptuser.username or buptuser.cookie_eaisess or '[None]'}`\n已启用自动签到。"
+        ret_msg = f"用户：`{buptuser.username}`\n已启用自动签到。"
         update.message.reply_markdown(ret_msg)
+
 
 def remove_entry(update, context):
     assert len(context.args) > 0, "错误的命令，请用 /help 查看使用帮助。"
 
-    tguser = TGUser.get(
-        userid = update.message.from_user.id
-    )
-    if context.args[0].lower() != 'all':
-        targets = tguser.get_buptusers_by_seqids(list(map(int, context.args)))
-    else:
-        targets = tguser.get_buptusers()
+    targets = _get_target(update, context)
 
     for buptuser in targets:
         buptuser.status = BUPTUserStatus.removed
         buptuser.save()
-        ret_msg = f"用户：`{buptuser.username or buptuser.cookie_eaisess or '[None]'}`\n已删除。"
+        ret_msg = f"用户：`{buptuser.username}`\n已删除。"
         update.message.reply_markdown(ret_msg)
 
     list_entry(update, context)
 
+
 def error_callback(update, context):
     """Log Errors caused by Updates."""
-    logger.warning('Update "%s" caused error "%s: %s"', update, context.error.__class__.__name__, context.error)
-    update.message.reply_text("{}: {}".format(context.error.__class__.__name__,context.error))
+    logger.warning('Update "%s" caused error "%s: %s"', update,
+                   context.error.__class__.__name__, context.error)
+    update.message.reply_text("{}: {}".format(
+        context.error.__class__.__name__, context.error))
     traceback.print_exc()
 
-def tg_debug_logging(update,context):
-    log_str = 'User %s `%d`: "%s"' % (update.message.from_user.username, update.message.from_user.id, update.message.text)
+
+def tg_debug_logging(update, context):
+    log_str = 'User %s `%d`: "%s"' % (
+        update.message.from_user.username, update.message.from_user.id, update.message.text)
     logger.info(log_str)
 
     # Skip forwarding when command call.
@@ -279,10 +269,13 @@ def tg_debug_logging(update,context):
     if update.message.from_user.id == TG_BOT_MASTER:
         return
 
-    updater.bot.send_message(chat_id=TG_BOT_MASTER, text="[LOG] "+ log_str, parse_mode = telegram.ParseMode.MARKDOWN)
+    updater.bot.send_message(
+        chat_id=TG_BOT_MASTER, text="[LOG] " + log_str, parse_mode=telegram.ParseMode.MARKDOWN)
     # Forward non-text message, like stickers.
     if update.message.text is None:
-        updater.bot.forward_message(TG_BOT_MASTER, update.message.chat_id, update.message.message_id)
+        updater.bot.forward_message(
+            TG_BOT_MASTER, update.message.chat_id, update.message.message_id)
+
 
 def checkinall_entry(update, context):
     assert update.message.from_user.id == TG_BOT_MASTER
@@ -292,6 +285,7 @@ def checkinall_entry(update, context):
     else:
         checkin_all()
 
+
 def checkinallxisu_entry(update, context):
     assert update.message.from_user.id == TG_BOT_MASTER
     if len(context.args) > 0:
@@ -300,19 +294,25 @@ def checkinallxisu_entry(update, context):
     else:
         checkin_all_xisu()
 
+
 def listall_entry(update, context):
     assert update.message.from_user.id == TG_BOT_MASTER
-    list_entry(update,context,admin_all=True)
+    list_entry(update, context, admin_all=True)
+
 
 def status_entry(update, context):
     assert update.message.from_user.id == TG_BOT_MASTER
-    cron_data = "\n".join(["name: %s, trigger: %s, handler: %s, next: %s" % (job.name, job.trigger, job.func, job.next_run_time) for job in scheduler.get_jobs()])
+    cron_data = "\n".join(["name: %s, trigger: %s, handler: %s, next: %s" % (
+        job.name, job.trigger, job.func, job.next_run_time) for job in scheduler.get_jobs()])
     update.message.reply_text("Cronjob: " + cron_data)
     update.message.reply_text("System time: " + str(datetime.datetime.now()))
 
+
 def send_message_entry(update, context):
     assert update.message.from_user.id == TG_BOT_MASTER
-    updater.bot.send_message(chat_id=context.args[0], text=' '.join(update.message.text.split(' ')[2:]))
+    updater.bot.send_message(chat_id=context.args[0], text=' '.join(
+        update.message.text.split(' ')[2:]))
+
 
 def broadcast_entry(update, context):
     assert update.message.from_user.id == TG_BOT_MASTER
@@ -322,7 +322,9 @@ def broadcast_entry(update, context):
     ).prefetch(TGUser):
         active_userids.add(user.owner.userid)
     for userid in active_userids:
-        updater.bot.send_message(chat_id=userid, text=' '.join(update.message.text.split(' ')[1:]))
+        updater.bot.send_message(chat_id=userid, text=' '.join(
+            update.message.text.split(' ')[1:]))
+
 
 def text_command_entry(update, context):
     req_args = update.message.text.strip(f'@{updater.bot.username}').split('_')
@@ -330,10 +332,13 @@ def text_command_entry(update, context):
     context.args = list(filter(lambda i: i != '', req_args[1:]))
     getattr(sys.modules[__name__], "%s_entry" % command)(update, context)
 
+
 def backup_db():
     logger.info("backup started!")
-    copyfile('./my_app.db', './backup/my_app.{}.db'.format(str(datetime.datetime.now()).replace(":","").replace(" ","_")))
+    copyfile('./my_app.db', './backup/my_app.{}.db'.format(
+        str(datetime.datetime.now()).replace(":", "").replace(" ", "_")))
     logger.info("backup finished!")
+
 
 def checkin_all_retry():
     logger.info("checkin_all_retry started!")
@@ -344,16 +349,18 @@ def checkin_all_retry():
         ret_msg = ''
         try:
             ret = user.ncov_checkin()[:100]
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n重试签到成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n重试签到成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
         except requests.exceptions.Timeout as e:
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n重试签到失败，服务器错误，请尝试手动签到！\nhttps://app.bupt.edu.cn/ncov/wap/default/index\n`{e}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n重试签到失败，服务器错误，请尝试手动签到！\nhttps://app.bupt.edu.cn/ncov/wap/default/index\n`{e}`\n{datetime.datetime.now()}"
             traceback.print_exc()
         except Exception as e:
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n重试签到异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n重试签到异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
             traceback.print_exc()
         logger.info(ret_msg)
-        updater.bot.send_message(chat_id=user.owner.userid, text=ret_msg, parse_mode = telegram.ParseMode.MARKDOWN)
+        updater.bot.send_message(
+            chat_id=user.owner.userid, text=ret_msg, parse_mode=telegram.ParseMode.MARKDOWN)
     logger.info("checkin_all_retry finished!")
+
 
 def checkin_all():
     try:
@@ -365,16 +372,34 @@ def checkin_all():
         ret_msg = ''
         try:
             ret = user.ncov_checkin()[:100]
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n自动签到成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n自动签到成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
         except requests.exceptions.Timeout as e:
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n自动签到失败，服务器错误，将重试！\n`{e}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n自动签到失败，服务器错误，将重试！\n`{e}`\n{datetime.datetime.now()}"
             traceback.print_exc()
         except Exception as e:
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n自动签到异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n自动签到异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
             traceback.print_exc()
         logger.info(ret_msg)
-        updater.bot.send_message(chat_id=user.owner.userid, text=ret_msg, parse_mode = telegram.ParseMode.MARKDOWN)
+        updater.bot.send_message(
+            chat_id=user.owner.userid, text=ret_msg, parse_mode=telegram.ParseMode.MARKDOWN)
     logger.info("checkin_all finished!")
+
+
+def checkin_outsch_all():
+    logger.info("checkin_outsch_all started!")
+    for user in BUPTUser.select().where(BUPTUser.status == BUPTUserStatus.normal).prefetch(TGUser):
+        ret_msg = ''
+        try:
+            ret = user.out_sch_checkin()[:100]
+            ret_msg = f"用户：`{user.username}`\n自动报备成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
+        except Exception as e:
+            ret_msg = f"用户：`{user.username}`\n自动报备异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
+            traceback.print_exc()
+        logger.info(ret_msg)
+        updater.bot.send_message(
+            chat_id=user.owner.userid, text=ret_msg, parse_mode=telegram.ParseMode.MARKDOWN)
+    logger.info("checkin_outsch_all finished!")
+
 
 def checkin_all_xisu_retry():
     global logger, updater
@@ -387,16 +412,18 @@ def checkin_all_xisu_retry():
         ret_msg = ''
         try:
             ret = user.xisu_ncov_checkin()[:100]
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n重试晨午晚检成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n重试晨午晚检成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
         except requests.exceptions.Timeout as e:
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n重试晨午晚检失败，服务器错误，请尝试手动签到！\n{config.XISU_REPORT_PAGE}\n`{e}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n重试晨午晚检失败，服务器错误，请尝试手动签到！\n{config.XISU_REPORT_PAGE}\n`{e}`\n{datetime.datetime.now()}"
             traceback.print_exc()
         except Exception as e:
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n重试晨午晚检异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n重试晨午晚检异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
             traceback.print_exc()
         logger.info(ret_msg)
-        updater.bot.send_message(chat_id=user.owner.userid, text=ret_msg, parse_mode = telegram.ParseMode.MARKDOWN)
+        updater.bot.send_message(
+            chat_id=user.owner.userid, text=ret_msg, parse_mode=telegram.ParseMode.MARKDOWN)
     logger.info("xisu_checkin_all_retry finished!")
+
 
 def checkin_all_xisu():
     global logger, updater
@@ -412,16 +439,18 @@ def checkin_all_xisu():
         ret_msg = ''
         try:
             ret = user.xisu_ncov_checkin()[:100]
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n自动晨午晚检成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n自动晨午晚检成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
         except requests.exceptions.Timeout as e:
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n自动晨午晚检失败，服务器错误，将重试！\n`{e}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n自动晨午晚检失败，服务器错误，将重试！\n`{e}`\n{datetime.datetime.now()}"
             traceback.print_exc()
         except Exception as e:
-            ret_msg = f"用户：`{user.username or user.cookie_eaisess or '[None]'}`\n自动晨午晚检异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
+            ret_msg = f"用户：`{user.username}`\n自动晨午晚检异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
             traceback.print_exc()
         logger.info(ret_msg)
-        updater.bot.send_message(chat_id=user.owner.userid, text=ret_msg, parse_mode = telegram.ParseMode.MARKDOWN)
+        updater.bot.send_message(
+            chat_id=user.owner.userid, text=ret_msg, parse_mode=telegram.ParseMode.MARKDOWN)
     logger.info("xisu_checkin_all finished!")
+
 
 def main():
     global updater, scheduler
@@ -436,7 +465,8 @@ def main():
         db_init()
         exit(0)
 
-    updater = Updater(TG_BOT_TOKEN, request_kwargs=TG_BOT_PROXY, use_context=True)
+    updater = Updater(
+        TG_BOT_TOKEN, request_kwargs=TG_BOT_PROXY, use_context=True)
     # Get the dispatcher to register handlers
     dp = updater.dispatcher
 
@@ -446,16 +476,17 @@ def main():
     dp.add_handler(CommandHandler("start", start_entry))
     dp.add_handler(CommandHandler("help", help_entry))
     dp.add_handler(CommandHandler("list", list_entry))
-    dp.add_handler(CommandHandler("add_by_uid", add_by_uid_entry))
-    dp.add_handler(CommandHandler("add_by_cookie", add_by_cookie_entry))
+    dp.add_handler(CommandHandler("add", add_user_entry))
     dp.add_handler(CommandHandler("checkin", checkin_entry))
     dp.add_handler(CommandHandler("checkinxisu", checkinxisu_entry))
+    dp.add_handler(CommandHandler("checkinoutsch", checkin_outsch_entry))
     dp.add_handler(CommandHandler("pause", pause_entry))
     dp.add_handler(CommandHandler("resume", resume_entry))
     dp.add_handler(CommandHandler("pausexisu", pausexisu_entry))
     dp.add_handler(CommandHandler("resumexisu", resumexisu_entry))
     dp.add_handler(CommandHandler("remove", remove_entry))
     dp.add_handler(MessageHandler(Filters.regex(r'^/(remove|resume|pause|checkin|checkinxisu|pausexisu|resumexisu)_.*$'), text_command_entry))
+    # admin operation
     dp.add_handler(CommandHandler("checkinall", checkinall_entry))
     dp.add_handler(CommandHandler("checkinallxisu", checkinallxisu_entry))
     dp.add_handler(CommandHandler("listall", listall_entry))
@@ -493,6 +524,17 @@ def main():
         trigger="cron",
         hour=CHECKIN_ALL_CRON_RETRY_HOUR,
         minute=CHECKIN_ALL_CRON_RETRY_MINUTE,
+        max_instances=1,
+        replace_existing=False,
+        misfire_grace_time=10,
+    )
+
+    scheduler.add_job(
+        func=checkin_outsch_all,
+        id='checkin_outsch_all',
+        trigger="cron",
+        hour=CHECKIN_OUTSCH_ALL_CRON_HOUR,
+        minute=CHECKIN_OUTSCH_ALL_CRON_MINUTE,
         max_instances=1,
         replace_existing=False,
         misfire_grace_time=10,
@@ -543,7 +585,8 @@ def main():
     )
 
     scheduler.start()
-    logger.info(["name: %s, trigger: %s, handler: %s, next: %s" % (job.name, job.trigger, job.func, job.next_run_time) for job in scheduler.get_jobs()])
+    logger.info(["name: %s, trigger: %s, handler: %s, next: %s" % (
+        job.name, job.trigger, job.func, job.next_run_time) for job in scheduler.get_jobs()])
 
     updater.idle()
 

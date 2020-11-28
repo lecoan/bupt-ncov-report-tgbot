@@ -4,12 +4,15 @@ import logging
 import requests
 import logging
 import json
+from datetime import datetime, timezone, timedelta
 from .config import *
 
 _logger = logging.getLogger(__name__)
 
+
 class UsernameNotSet(Exception):
     pass
+
 
 def match_re_group1(re_str: str, text: str) -> str:
     """
@@ -23,6 +26,7 @@ def match_re_group1(re_str: str, text: str) -> str:
         raise ValueError(f'在文本中匹配 {re_str} 失败，没找到任何东西。\n请阅读脚本文档中的“使用前提”部分。')
 
     return match.group(1)
+
 
 def extract_post_data(html: str, old_data=None) -> Dict[str, str]:
     """
@@ -75,22 +79,24 @@ def extract_post_data(html: str, old_data=None) -> Dict[str, str]:
 
     try:
         if len(old_data['address']) == 0 \
-        or (
-            len(old_data['city']) == 0 \
-            and old_data['province'] in ['北京市','上海市','重庆市','天津市']
+            or (
+            len(old_data['city']) == 0
+            and old_data['province'] in ['北京市', '上海市', '重庆市', '天津市']
         ):
             geo_info = json.loads(old_data['geo_api_info'])
             old_data['address'] = geo_info['formattedAddress']
             old_data['province'] = geo_info['addressComponent']['province']
-            if old_data['province'] in ['北京市','上海市','重庆市','天津市']:
+            if old_data['province'] in ['北京市', '上海市', '重庆市', '天津市']:
                 old_data['city'] = geo_info['addressComponent']['province']
             else:
                 old_data['city'] = geo_info['addressComponent']['city']
-            old_data['area'] = ' '.join([old_data['province'], old_data['city'], geo_info['addressComponent']['district']])
+            old_data['area'] = ' '.join(
+                [old_data['province'], old_data['city'], geo_info['addressComponent']['district']])
     except json.decoder.JSONDecodeError as e:
         raise RuntimeError(f'定位信息为空，自动修复地址信息失败。手动上报一次后方可正常使用。')
 
     return old_data
+
 
 def build_xisu_ncov_checkin_post_data(ncov_report_page_html, xisu_nconv_checkin_pending_form):
     ncov_report_post_data = extract_post_data(ncov_report_page_html)
@@ -113,3 +119,42 @@ def build_xisu_ncov_checkin_post_data(ncov_report_page_html, xisu_nconv_checkin_
     filled_form['geo_api_info'] = ncov_report_post_data['geo_api_info']
 
     return filled_form
+
+
+def build_out_sch_post_data(user, out_loc: str, out_execuse: str) -> str:
+    current = datetime.now().date().isoformat()
+    leave_time = datetime.fromisoformat(
+        f"{current}T06:00:00+08:00").astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+    return_time = datetime.fromisoformat(
+        f"{current}T23:59:00+08:00").astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+    today_time = f"{current}T00:00:00+08:00"
+    payload = {
+        "app_id": "578",
+        "node_id": "",
+        "form_data": {
+            "1716": {
+                "User_5": "杨翔",  # 姓名
+                "User_7": f"{user.username}",  # 学号
+                "User_9": "计算机学院（国家示范性软件学院）",  # 学院
+                "User_11": f"{user.phone}",  # 手机号
+                "Input_28": f"{out_loc}",     # 外出地点
+                "Radio_52": {"value": "1", "name": "本人已阅读并承诺"},
+                "Calendar_47": return_time,  # 返校时间
+                "Calendar_50": leave_time,  # 出校时间
+                "Calendar_62": today_time,  # # 外出返校日期
+                # [沙河校区、西土城校区]
+                "SelectV2_58": [{"name": "西土城校区", "value": "2", "default": 0, "imgdata": ""}],
+                "MultiInput_30": f"{out_execuse}",   # 外出事项
+                "UserSearch_60": {"uid": 72238, "name": "李祉莹"}  # 辅导员
+            }
+        }
+    }
+    return json.dumps(payload)
+
+
+__all__ = [
+    'build_out_sch_post_data',
+    'build_xisu_ncov_checkin_post_data',
+    'extract_post_data',
+    'match_re_group1'
+    ]

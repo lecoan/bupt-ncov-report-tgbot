@@ -1,4 +1,7 @@
 import datetime
+import logging
+import requests
+import json
 from peewee import *
 from playhouse.migrate import *
 from .config import *
@@ -15,7 +18,6 @@ class BUPTUserStatus:
     normal  = 0
     stopped = 1
     removed = 2
-    warning = 3
 
 class TGUser(BaseModel):
     id = AutoField()
@@ -55,6 +57,13 @@ class BUPTUser(BaseModel):
     latest_xisu_checkin_response_time = DateTimeField(null=True, index=True)
     xisu_checkin_status = IntegerField(index=True, default=BUPTUserStatus.normal)
 
+    # TODO 似乎有的并不需要
+    cookie_vjuid = CharField(null=True)
+    cookie_vjvd = CharField(null=True)
+    cookie_vt = CharField(null=True)
+    cookie_castgc = CharField(null=True)
+    phone = CharField(null=True)
+
     def save(self, *args, **kwargs):
         self.update_time = datetime.datetime.now()
         return super(BUPTUser, self).save(*args, **kwargs)
@@ -92,6 +101,67 @@ class BUPTUser(BaseModel):
         else:
             _logger.warning(f'[login] Failed! user: {self.username}, ret: {ret_data}')
             raise RuntimeWarning(f'Login failed! Server return: `{ret_data}`')
+    
+    def out_sch_login(self):
+        self.check_status()
+        assert self.username != None
+        _logger.info(f"[login] Trying user: {self.username}")
+        session = requests.Session()
+        session.proxies.update(CHECKIN_PROXY)
+
+        login_page = session.get(OUT_SCH_LOGIN, allow_redirects=False, timeout=API_TIMEOUT)
+        lt = match_re_group1('<input type="hidden" name="lt" value="(.*)" />', login_page.text)
+        login_resp = session.post(OUT_SCH_LOGIN, data={
+            'username': self.username,
+            'password': self.password,
+            'lt': lt,
+            'execution': 'e1s1',
+            '_eventId': 'submit',
+            'rmShown': 1,
+
+        }, timeout=API_TIMEOUT)
+        _logger.debug(login_resp.text)
+        is_login_resp = session.get(OUT_SCH_IS_LOGIN, timeout=API_TIMEOUT)
+        try:
+            is_login_resp_json = is_login_resp.json()
+            self.cookie_castgc = session.cookies['CASTGC']
+            self.cookie_vjuid = session.cookies['vjuid']
+            self.cookie_vjvd = session.cookies['vjvd']
+            self.cookie_vt = session.cookies['vt']
+            self.save()
+            return session
+        except json.JSONDecodeError:
+            raise RuntimeWarning(f'[login] Failed! user: {self.username}')
+
+    def out_sch_checkin(self, force=False):
+        assert self.phone != None
+        if not force:
+            self.check_status()
+        session = requests.Session()
+        session.proxies.update(CHECKIN_PROXY)
+        if self.cookie_castgc != None:
+            cookies={
+                'CASTGC': self.cookie_castgc,
+                'UUKey': self.cookie_uukey,
+                'vjuid': self.cookie_vjuid,
+                'vjvd': self.cookie_vjvd,
+                'vt': self.cookie_vt
+            }
+            requests.utils.add_dict_to_cookiejar(session.cookies, cookies)
+        
+        is_login_resp = session.get(OUT_SCH_IS_LOGIN, timeout=API_TIMEOUT)
+        try:
+            is_login_resp.json()
+        except json.JSONDecodeError:
+            session = self.out_sch_login()
+        
+        payload = build_out_sch_post_data(self, '南门', '吃饭')
+        upload_resp = session.post(OUT_SCH_API, data={'data': payload}, timeout=API_TIMEOUT)
+        if upload_resp.json()['e'] == 0:
+            return upload_resp.text.strip()
+        else:
+            raise Exception(upload_resp.text.strip())
+
 
     def ncov_checkin(self, force=False):
         if not force:
@@ -108,13 +178,7 @@ class BUPTUser(BaseModel):
         report_page_resp = session.get(REPORT_PAGE, allow_redirects=False, timeout=API_TIMEOUT)
         _logger.debug(f'[report page] status: {report_page_resp.status_code}')
         if report_page_resp.status_code == 302:
-            if self.username != None:
-                session = self.login()
-            else:
-                # TODO: warning status update
-                self.status = BUPTUserStatus.warning
-                self.save()
-                raise RuntimeWarning(f'Cookies expired with no login info set. Please update your cookie. \neai-sess:`{self.cookie_eaisess}`')
+            session = self.login()
             report_page_resp = session.get(REPORT_PAGE, allow_redirects=False, timeout=API_TIMEOUT)
         if report_page_resp.status_code != 200:
             RuntimeError(f'Report Page returned {report_page_resp.status_code}.')
@@ -159,13 +223,7 @@ class BUPTUser(BaseModel):
         history_data = session.get(XISU_HISTORY_DATA, allow_redirects=False, timeout=API_TIMEOUT)
         _logger.debug(f'[xisu report page] status: {history_data.status_code}')
         if history_data.status_code == 302:
-            if self.username != None:
-                session = self.login()
-            else:
-                # TODO: warning status update
-                self.xisu_checkin_status = BUPTUserStatus.warning
-                self.save()
-                raise RuntimeWarning(f'Cookies expired with no login info set. Please update your cookie. \neai-sess:`{self.cookie_eaisess}`')
+            session = self.login()
             history_data = session.get(XISU_HISTORY_DATA, allow_redirects=False, timeout=API_TIMEOUT)
         if history_data.status_code != 200:
             RuntimeError(f'Xisu Report Page returned {history_data.status_code}.')

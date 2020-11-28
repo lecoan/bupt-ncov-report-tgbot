@@ -1,3 +1,4 @@
+.DS_Store
 # App
 my_app.db
 include/config.py
