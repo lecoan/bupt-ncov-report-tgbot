@@ -121,36 +121,36 @@ def build_xisu_ncov_checkin_post_data(ncov_report_page_html, xisu_nconv_checkin_
     return filled_form
 
 
-def build_out_sch_post_data(user, out_loc: str, out_execuse: str) -> str:
+def build_out_sch_post_data(user) -> str:
     current = datetime.now().date().isoformat()
     leave_time = datetime.fromisoformat(
         f"{current}T06:00:00+08:00").astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
     return_time = datetime.fromisoformat(
         f"{current}T23:59:00+08:00").astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
     today_time = f"{current}T00:00:00+08:00"
+    out_dict = json.loads(user.out_json)
     payload = {
         "app_id": "578",
         "node_id": "",
         "form_data": {
             "1716": {
-                "User_5": "杨翔",  # 姓名
+                "User_5": out_dict['username'],  # 姓名
                 "User_7": f"{user.username}",  # 学号
                 "User_9": "计算机学院（国家示范性软件学院）",  # 学院
-                "User_11": f"{user.phone}",  # 手机号
-                "Input_28": f"{out_loc}",     # 外出地点
+                "User_11": f"{out_dict['phone']}",  # 手机号
+                "Input_28": f"{out_dict['out_loc']}",     # 外出地点
                 "Radio_52": {"value": "1", "name": "本人已阅读并承诺"},
                 "Calendar_47": return_time,  # 返校时间
                 "Calendar_50": leave_time,  # 出校时间
                 "Calendar_62": today_time,  # # 外出返校日期
                 # [沙河校区、西土城校区]
                 "SelectV2_58": [{"name": "西土城校区", "value": "2", "default": 0, "imgdata": ""}],
-                "MultiInput_30": f"{out_execuse}",   # 外出事项
-                "UserSearch_60": {"uid": 72238, "name": "李祉莹"}  # 辅导员
+                "MultiInput_30": f"{out_dict['out_execuse']}",   # 外出事项
+                "UserSearch_60": {"uid": out_dict['monitor_id'], "name": out_dict['monitor']}  # 辅导员
             }
         }
     }
     return json.dumps(payload)
-
 
 __all__ = [
     'build_out_sch_post_data',

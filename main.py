@@ -5,6 +5,7 @@ import traceback
 import sys
 import datetime
 import requests
+import json
 import logging
 from shutil import copyfile
 
@@ -14,45 +15,53 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Dispa
 import telegram
 
 
-def tguser_check(update, context):
-    if BOT_DEBUG == True and update.message.from_user.id != TG_BOT_MASTER:
-        update.message.reply_text("DEBUGGING, Try again later.")
-        raise DispatcherHandlerStop()
-
-    user, _ = TGUser.get_or_create(
-        userid=update.message.from_user.id
-    )
-    now_username = update.message.from_user.username or update.message.from_user.first_name
-    if user.username != now_username:
-        user.username = now_username
-        user.save()
+def _get_target(update, context):
+    return [user for user in BUPTUser.select() if (user.username in context.args) or (not context.args)]
 
 
+def _out_sch_check(update, buptuser, force=False):
+    if buptuser.out_json is None:
+        update.message.reply_markdown("> To enable auto leaving school record, you need to send me a json text")
+        update.message.reply_text('/upload \<stu-id\> {"username":"","phone":"","out_loc":"","out_execuse":"","monitor":"","monitor_id":""}')
+        return 'More data needed!'
+    return buptuser.out_sch_checkin(force=force)[:100]
+
+
+
+def private_check(func):
+    def inner(update, context, *args, **kwargs):
+        if update.message.from_user.id != TG_BOT_MASTER:
+            update.message.reply_markdown('# 403 Forbidden')
+        else:
+            func(update, context, *args, **kwargs)
+    return inner
+
+
+@private_check
+def upload_entry(update, context):
+    stu_id, sjson = context.args
+    try:
+        buptuser = BUPTUser.get(BUPTUser.username == stu_id)
+        json.loads(sjson)
+        buptuser.out_json = sjson
+        buptuser.save()
+        update.message.reply_text('stored')
+    except Exception as e:
+        update.message.reply_text(f'Error: {e}')
+
+
+@private_check
 def start_entry(update, context):
     """Send a message when the command /start is issued."""
-    update.message.reply_text("Welcome, {}. try /help.\nSpecial Thanks to https://github.com/ipid/bupt-ncov-report".format(
+    update.message.reply_text("Welcome, {}.\nSpecial Thanks to https://github.com/ipid/bupt-ncov-report".format(
         update.message.from_user.username or update.message.from_user.first_name or ''), disable_web_page_preview=True)
-    help_entry(update, context)
 
 
-def help_entry(update, context):
-    """Send a message when the command /help is issued."""
-    update.message.reply_markdown(
-        HELP_MARKDOWN.strip(), disable_web_page_preview=True)
-
-
+@private_check
 def list_entry(update, context, admin_all=False):
     first_message = update.message.reply_markdown(f"用户列表查询中 ...")
-    if admin_all == True:
-        users = BUPTUser.select().where(
-            BUPTUser.status != BUPTUserStatus.removed).prefetch(TGUser)
-    else:
-        # users = BUPTUser.select().where(BUPTUser.owner == update.message.from_user.id).order_by(BUPTUser.id.asc())
-        tguser = TGUser.get(
-            userid=update.message.from_user.id
-        )
-        users = tguser.buptusers.where(
-            BUPTUser.status != BUPTUserStatus.removed)
+    users = BUPTUser.select()
+
     ret_msgs = []
     ret_msg = ''
     for i, user in enumerate(users):
@@ -73,32 +82,16 @@ def list_entry(update, context, admin_all=False):
             ret_msg += f'自动签到: `启用`\n'
         else:
             ret_msg += f'自动签到: `暂停`\n'
-        if user.xisu_checkin_status == BUPTUserStatus.normal:
-            ret_msg += f'自动晨午晚检: `启用`\n'
-        else:
-            ret_msg += f'自动晨午晚检: `暂停`\n'
         if user.latest_response_data == None:
             ret_msg += '从未尝试签到\n'
         else:
             ret_msg += f'最后签到时间: `{user.latest_response_time}`\n'
             ret_msg += f'最后签到返回: `{user.latest_response_data[:100]}`\n'
-
-        if user.latest_xisu_checkin_response_data == None:
-            ret_msg += '从未尝试晨午晚检签到\n'
-        else:
-            ret_msg += f'最后晨午晚检签到时间: `{user.latest_xisu_checkin_response_time}`\n'
-            ret_msg += f'最后晨午晚检签到返回: `{user.latest_xisu_checkin_response_data[:100]}`\n'
-
-        if not admin_all:
-            ret_msg += f'暂停 /pause\_{id}   恢复 /resume\_{id}\n签到 /checkin\_{id} 删除 /remove\_{id}\n晨午晚检签到 /checkinxisu\_{id}\n'
-            ret_msg += f'暂停自动晨午晚检 /pausexisu\_{id} 恢复自动晨午晚检 /resumexisu\_{id}\n'
         ret_msg += "\n"
     ret_msgs.append(ret_msg)
 
     if len(users) == 0:
         ret_msgs = ['用户列表为空']
-    if len(users) >= 2 and not admin_all:
-        ret_msgs[-1] += f'恢复全部 /resume  暂停全部 /pause\n签到全部 /checkin  删除全部 /remove\_all \n晨午晚检签到 /checkinxisu\n暂停自动晨午晚检 /pausexisu 恢复自动晨午晚检 /resumexisu\n'
     logger.debug(ret_msgs)
 
     first_message.delete()
@@ -106,46 +99,27 @@ def list_entry(update, context, admin_all=False):
         update.message.reply_markdown(msg)
 
 
+@private_check
 def add_user_entry(update, context):
-    if len(context.args) < 2:
+    if len(context.args) != 2:
         first_message = update.message.reply_markdown(
-            f"例：/add `2010211000` `password123` [13000110011]")
+            f"例：/add `2010211000` `password123`")
         return
-    username = context.args[0]
-    password = context.args[1]
-    phone = context.args[2] if len(context.args) > 2 else None
-
+    username, password = context.args
     first_message = update.message.reply_markdown(f"Adding ...")
 
-    tguser = TGUser.get(
-        userid=update.message.from_user.id
-    )
-
     buptuser, _ = BUPTUser.get_or_create(
-        owner=tguser,
         username=username,
         password=password,
-        phone=phone,
-        status=BUPTUserStatus.normal,
-        xisu_checkin_status=BUPTUserStatus.normal,
+        status=BUPTUserStatus.normal
     )
 
     first_message.edit_text('添加成功！', parse_mode=telegram.ParseMode.MARKDOWN)
     list_entry(update, context)
 
 
-def _get_target(update, context):
-    tguser = TGUser.get(
-        userid=update.message.from_user.id
-    )
-    if len(context.args) > 0:
-        targets = tguser.get_buptusers_by_seqids(list(map(int, context.args)))
-    else:
-        targets = tguser.get_buptusers()
-    return targets
-
-
-def checkin_outsch_entry(update, context):
+@private_check
+def checkin_out_entry(update, context):
     targets = _get_target(update, context)
     if len(targets) == 0:
         ret_msg = '用户列表为空'
@@ -153,19 +127,19 @@ def checkin_outsch_entry(update, context):
         return
     for buptuser in targets:
         try:
-            ret = buptuser.out_sch_checkin(force=True)[:100]
-            ret_msg = f"用户：`{buptuser.username}`\n签到成功！\n服务器返回：`{ret}`"
+            ret = _out_sch_check(update, buptuser)
+            ret_msg = f"用户：`{buptuser.username}`\n报备成功！\n服务器返回：`{ret}`"
         except Exception as e:
-            ret_msg = f"用户：`{buptuser.username}`\n签到异常！\n服务器返回：`{e}`"
+            ret_msg = f"用户：`{buptuser.username}`\n报备异常！\n服务器返回：`{e}`"
         update.message.reply_markdown(ret_msg)
 
 
+@private_check
 def checkin_entry(update, context):
     targets = _get_target(update, context)
     if len(targets) == 0:
         ret_msg = '用户列表为空'
         update.message.reply_markdown(ret_msg)
-        ret_msg = f"用户：`{buptuser.username}`\n签到成功！\n服务器返回：`{ret}`"
         return
     for buptuser in targets:
         try:
@@ -178,42 +152,7 @@ def checkin_entry(update, context):
         update.message.reply_markdown(ret_msg)
 
 
-def checkinxisu_entry(update, context):
-    targets = _get_target(update, context)
-    if len(targets) == 0:
-        ret_msg = '用户列表为空'
-        update.message.reply_markdown(ret_msg)
-        return
-    for buptuser in targets:
-        try:
-            ret = buptuser.xisu_ncov_checkin(force=True)[:100]
-            ret_msg = f"用户：`{buptuser.username}`\n晨午晚检成功！\n服务器返回：`{ret}`"
-        except requests.exceptions.Timeout as e:
-            ret_msg = f"用户：`{buptuser.username}`\n晨午晚检失败，服务器错误！\n`{e}`"
-        except Exception as e:
-            ret_msg = f"用户：`{buptuser.username}`\n晨午晚检异常！\n服务器返回：`{e}`"
-        update.message.reply_markdown(ret_msg)
-
-
-def pausexisu_entry(update, context):
-    targets = _get_target(update, context)
-    for buptuser in targets:
-        buptuser.xisu_checkin_status = BUPTUserStatus.stopped
-        buptuser.save()
-        ret_msg = f"用户：`{buptuser.username}`\n已暂停自动晨午晚检。"
-        update.message.reply_markdown(ret_msg)
-
-
-def resumexisu_entry(update, context):
-    targets = _get_target(update, context)
-
-    for buptuser in targets:
-        buptuser.xisu_checkin_status = BUPTUserStatus.normal
-        buptuser.save()
-        ret_msg = f"用户：`{buptuser.username}`\n已启用自动晨午晚检。"
-        update.message.reply_markdown(ret_msg)
-
-
+@private_check
 def pause_entry(update, context):
     targets = _get_target(update, context)
 
@@ -224,6 +163,7 @@ def pause_entry(update, context):
         update.message.reply_markdown(ret_msg)
 
 
+@private_check
 def resume_entry(update, context):
     targets = _get_target(update, context)
 
@@ -234,20 +174,21 @@ def resume_entry(update, context):
         update.message.reply_markdown(ret_msg)
 
 
+@private_check
 def remove_entry(update, context):
-    assert len(context.args) > 0, "错误的命令，请用 /help 查看使用帮助。"
+    assert len(context.args) > 0, "错误的命令。"
 
     targets = _get_target(update, context)
 
     for buptuser in targets:
-        buptuser.status = BUPTUserStatus.removed
-        buptuser.save()
+        buptuser.delete_instance()
         ret_msg = f"用户：`{buptuser.username}`\n已删除。"
         update.message.reply_markdown(ret_msg)
 
     list_entry(update, context)
 
 
+@private_check
 def error_callback(update, context):
     """Log Errors caused by Updates."""
     logger.warning('Update "%s" caused error "%s: %s"', update,
@@ -257,6 +198,7 @@ def error_callback(update, context):
     traceback.print_exc()
 
 
+@private_check
 def tg_debug_logging(update, context):
     log_str = 'User %s `%d`: "%s"' % (
         update.message.from_user.username, update.message.from_user.id, update.message.text)
@@ -277,60 +219,12 @@ def tg_debug_logging(update, context):
             TG_BOT_MASTER, update.message.chat_id, update.message.message_id)
 
 
-def checkinall_entry(update, context):
-    assert update.message.from_user.id == TG_BOT_MASTER
-    if len(context.args) > 0:
-        if context.args[0] == 'retry':
-            checkin_all_retry()
-    else:
-        checkin_all()
-
-
-def checkinallxisu_entry(update, context):
-    assert update.message.from_user.id == TG_BOT_MASTER
-    if len(context.args) > 0:
-        if context.args[0] == 'retry':
-            checkin_all_xisu_retry()
-    else:
-        checkin_all_xisu()
-
-
-def listall_entry(update, context):
-    assert update.message.from_user.id == TG_BOT_MASTER
-    list_entry(update, context, admin_all=True)
-
-
+@private_check
 def status_entry(update, context):
-    assert update.message.from_user.id == TG_BOT_MASTER
     cron_data = "\n".join(["name: %s, trigger: %s, handler: %s, next: %s" % (
         job.name, job.trigger, job.func, job.next_run_time) for job in scheduler.get_jobs()])
     update.message.reply_text("Cronjob: " + cron_data)
     update.message.reply_text("System time: " + str(datetime.datetime.now()))
-
-
-def send_message_entry(update, context):
-    assert update.message.from_user.id == TG_BOT_MASTER
-    updater.bot.send_message(chat_id=context.args[0], text=' '.join(
-        update.message.text.split(' ')[2:]))
-
-
-def broadcast_entry(update, context):
-    assert update.message.from_user.id == TG_BOT_MASTER
-    active_userids = set()
-    for user in BUPTUser.select().where(
-        (BUPTUser.status == BUPTUserStatus.normal)
-    ).prefetch(TGUser):
-        active_userids.add(user.owner.userid)
-    for userid in active_userids:
-        updater.bot.send_message(chat_id=userid, text=' '.join(
-            update.message.text.split(' ')[1:]))
-
-
-def text_command_entry(update, context):
-    req_args = update.message.text.strip(f'@{updater.bot.username}').split('_')
-    command = req_args[0][1:]
-    context.args = list(filter(lambda i: i != '', req_args[1:]))
-    getattr(sys.modules[__name__], "%s_entry" % command)(update, context)
 
 
 def backup_db():
@@ -345,7 +239,7 @@ def checkin_all_retry():
     for user in BUPTUser.select().where(
         (BUPTUser.status == BUPTUserStatus.normal)
         & (BUPTUser.latest_response_time < datetime.datetime.combine(datetime.date.today(), datetime.datetime.min.time()))
-    ).prefetch(TGUser):
+    ):
         ret_msg = ''
         try:
             ret = user.ncov_checkin()[:100]
@@ -368,7 +262,7 @@ def checkin_all():
     except:
         pass
     logger.info("checkin_all started!")
-    for user in BUPTUser.select().where(BUPTUser.status == BUPTUserStatus.normal).prefetch(TGUser):
+    for user in BUPTUser.select().where(BUPTUser.status == BUPTUserStatus.normal):
         ret_msg = ''
         try:
             ret = user.ncov_checkin()[:100]
@@ -381,75 +275,24 @@ def checkin_all():
             traceback.print_exc()
         logger.info(ret_msg)
         updater.bot.send_message(
-            chat_id=user.owner.userid, text=ret_msg, parse_mode=telegram.ParseMode.MARKDOWN)
+            chat_id=TG_BOT_MASTER, text=ret_msg, parse_mode=telegram.ParseMode.MARKDOWN)
     logger.info("checkin_all finished!")
 
 
-def checkin_outsch_all():
-    logger.info("checkin_outsch_all started!")
-    for user in BUPTUser.select().where(BUPTUser.status == BUPTUserStatus.normal).prefetch(TGUser):
+def checkin_out_all():
+    logger.info("checkin_out_all started!")
+    for user in BUPTUser.select().where(BUPTUser.status == BUPTUserStatus.normal):
         ret_msg = ''
         try:
-            ret = user.out_sch_checkin()[:100]
+            ret = _out_sch_check(updater, user)
             ret_msg = f"用户：`{user.username}`\n自动报备成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
         except Exception as e:
             ret_msg = f"用户：`{user.username}`\n自动报备异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
             traceback.print_exc()
         logger.info(ret_msg)
         updater.bot.send_message(
-            chat_id=user.owner.userid, text=ret_msg, parse_mode=telegram.ParseMode.MARKDOWN)
-    logger.info("checkin_outsch_all finished!")
-
-
-def checkin_all_xisu_retry():
-    global logger, updater
-    logger.info("xisu_checkin_all_retry started!")
-    for user in BUPTUser.select().where(
-            (BUPTUser.status != BUPTUserStatus.removed)
-            & (BUPTUser.xisu_checkin_status == BUPTUserStatus.normal)
-            & (BUPTUser.latest_xisu_checkin_response_time < datetime.datetime.combine(datetime.date.today(), datetime.datetime.min.time()))
-    ).prefetch(TGUser):
-        ret_msg = ''
-        try:
-            ret = user.xisu_ncov_checkin()[:100]
-            ret_msg = f"用户：`{user.username}`\n重试晨午晚检成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
-        except requests.exceptions.Timeout as e:
-            ret_msg = f"用户：`{user.username}`\n重试晨午晚检失败，服务器错误，请尝试手动签到！\n{config.XISU_REPORT_PAGE}\n`{e}`\n{datetime.datetime.now()}"
-            traceback.print_exc()
-        except Exception as e:
-            ret_msg = f"用户：`{user.username}`\n重试晨午晚检异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
-            traceback.print_exc()
-        logger.info(ret_msg)
-        updater.bot.send_message(
-            chat_id=user.owner.userid, text=ret_msg, parse_mode=telegram.ParseMode.MARKDOWN)
-    logger.info("xisu_checkin_all_retry finished!")
-
-
-def checkin_all_xisu():
-    global logger, updater
-    try:
-        backup_db()
-    except:
-        pass
-    logger.info("xisu_checkin_all started!")
-    for user in BUPTUser.select().where(
-            (BUPTUser.status != BUPTUserStatus.removed)
-            & (BUPTUser.xisu_checkin_status == BUPTUserStatus.normal)
-    ).prefetch(TGUser):
-        ret_msg = ''
-        try:
-            ret = user.xisu_ncov_checkin()[:100]
-            ret_msg = f"用户：`{user.username}`\n自动晨午晚检成功！\n服务器返回：`{ret}`\n{datetime.datetime.now()}"
-        except requests.exceptions.Timeout as e:
-            ret_msg = f"用户：`{user.username}`\n自动晨午晚检失败，服务器错误，将重试！\n`{e}`\n{datetime.datetime.now()}"
-            traceback.print_exc()
-        except Exception as e:
-            ret_msg = f"用户：`{user.username}`\n自动晨午晚检异常！\n服务器返回：`{e}`\n{datetime.datetime.now()}"
-            traceback.print_exc()
-        logger.info(ret_msg)
-        updater.bot.send_message(
-            chat_id=user.owner.userid, text=ret_msg, parse_mode=telegram.ParseMode.MARKDOWN)
-    logger.info("xisu_checkin_all finished!")
+            chat_id=TG_BOT_MASTER, text=ret_msg, parse_mode=telegram.ParseMode.MARKDOWN)
+    logger.info("checkin_out_all finished!")
 
 
 def main():
@@ -472,28 +315,16 @@ def main():
 
     # on different commands - answer in Telegram
     dp.add_handler(MessageHandler(Filters.all, tg_debug_logging), -10)
-    dp.add_handler(MessageHandler(Filters.all, tguser_check), -1)
     dp.add_handler(CommandHandler("start", start_entry))
-    dp.add_handler(CommandHandler("help", help_entry))
     dp.add_handler(CommandHandler("list", list_entry))
     dp.add_handler(CommandHandler("add", add_user_entry))
     dp.add_handler(CommandHandler("checkin", checkin_entry))
-    dp.add_handler(CommandHandler("checkinxisu", checkinxisu_entry))
-    dp.add_handler(CommandHandler("checkinoutsch", checkin_outsch_entry))
+    dp.add_handler(CommandHandler("checkinout", checkin_out_entry))
+    dp.add_handler(CommandHandler("upload", upload_entry))
     dp.add_handler(CommandHandler("pause", pause_entry))
     dp.add_handler(CommandHandler("resume", resume_entry))
-    dp.add_handler(CommandHandler("pausexisu", pausexisu_entry))
-    dp.add_handler(CommandHandler("resumexisu", resumexisu_entry))
     dp.add_handler(CommandHandler("remove", remove_entry))
-    dp.add_handler(MessageHandler(Filters.regex(r'^/(remove|resume|pause|checkin|checkinxisu|pausexisu|resumexisu)_.*$'), text_command_entry))
-    # admin operation
-    dp.add_handler(CommandHandler("checkinall", checkinall_entry))
-    dp.add_handler(CommandHandler("checkinallxisu", checkinallxisu_entry))
-    dp.add_handler(CommandHandler("listall", listall_entry))
     dp.add_handler(CommandHandler("status", status_entry))
-    dp.add_handler(CommandHandler("sendmsg", send_message_entry))
-    dp.add_handler(CommandHandler("broadcast", broadcast_entry))
-    #dp.add_handler(MessageHandler(Filters.command, no_such_command),10)
 
     # on noncommand i.e message - echo the message on Telegram
     #dp.add_handler(MessageHandler(Filters.text, echo))
@@ -530,55 +361,11 @@ def main():
     )
 
     scheduler.add_job(
-        func=checkin_outsch_all,
-        id='checkin_outsch_all',
+        func=checkin_out_all,
+        id='checkin_out_all',
         trigger="cron",
-        hour=CHECKIN_OUTSCH_ALL_CRON_HOUR,
-        minute=CHECKIN_OUTSCH_ALL_CRON_MINUTE,
-        max_instances=1,
-        replace_existing=False,
-        misfire_grace_time=10,
-    )
-
-    # xisu checkin noon cron job group
-    scheduler.add_job(
-        func=checkin_all_xisu,
-        id='xisu_checkin_all_noon',
-        trigger="cron",
-        hour=XISU_CHECKIN_ALL_CRON_NOON_HOUR,
-        minute=XISU_CHECKIN_ALL_CRON_NOON_MINUTE,
-        max_instances=1,
-        replace_existing=False,
-        misfire_grace_time=10,
-    )
-    scheduler.add_job(
-        func=checkin_all_xisu_retry,
-        id='xisu_checkin_all_noon_retry',
-        trigger="cron",
-        hour=XISU_CHECKIN_ALL_CRON_NOON_RETRY_HOUR,
-        minute=XISU_CHECKIN_ALL_CRON_NOON_RETRY_MINUTE,
-        max_instances=1,
-        replace_existing=False,
-        misfire_grace_time=10,
-    )
-
-    # xisu checkin night cron job group
-    scheduler.add_job(
-        func=checkin_all_xisu,
-        id='xisu_checkin_all_night',
-        trigger="cron",
-        hour=XISU_CHECKIN_ALL_CRON_NIGHT_HOUR,
-        minute=XISU_CHECKIN_ALL_CRON_NIGHT_MINUTE,
-        max_instances=1,
-        replace_existing=False,
-        misfire_grace_time=10,
-    )
-    scheduler.add_job(
-        func=checkin_all_xisu_retry,
-        id='xisu_checkin_all_night_retry',
-        trigger="cron",
-        hour=XISU_CHECKIN_ALL_CRON_NIGHT_RETRY_HOUR,
-        minute=XISU_CHECKIN_ALL_CRON_NIGHT_RETRY_MINUTE,
+        hour=CHECKIN_OUT_ALL_CRON_HOUR,
+        minute=CHECKIN_OUT_ALL_CRON_MINUTE,
         max_instances=1,
         replace_existing=False,
         misfire_grace_time=10,
